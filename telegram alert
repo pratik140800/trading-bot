@@ -1,0 +1,45 @@
+import requests
+
+def send_telegram_alert(results_df):
+    """Sends the screener results to a private Telegram chat."""
+    BOT_TOKEN = os.environ.get('AAGE4ZLUwMXI6Oagh8SXKgxiSYnCRpriNvk')
+    CHAT_ID = os.environ.get('806843206')
+    
+    if not BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram credentials missing in environment variables.")
+        return
+
+    # Format the message
+    message = f"📊 *Market Signals - {datetime.now().strftime('%H:%M %d-%m-%Y')}*\n\n"
+    
+    for _, row in results_df.iterrows():
+        # Use emojis for easier reading
+        signal_emoji = {
+            "BUY 🟢": "🟢 BUY",
+            "SELL 🔴": "🔴 SELL",
+            "EXIT LONG ⚠️": "⚠️ EXIT LONG",
+            "EXIT SHORT ⚠️": "⚠️ EXIT SHORT",
+            "HOLD ➖": "➖ HOLD"
+        }.get(row['Signal'], row['Signal'])
+        
+        message += f"*{row['Ticker']}*\n"
+        message += f"Price: {row['Latest Price']}\n"
+        message += f"Trend: {row['Daily Trend']}\n"
+        message += f"Action: {signal_emoji}\n\n"
+
+    # Send to Telegram
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print("✅ Telegram alert sent successfully!")
+        else:
+            print(f"❌ Telegram Error: {response.text}")
+    except Exception as e:
+        print(f"❌ Failed to send Telegram message: {e}")
