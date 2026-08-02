@@ -12,8 +12,8 @@ WATCHLIST = [
     '^NSEI',      # NIFTY 50
     '^NSEBANK',   # BANK NIFTY
     'RELIANCE.NS', # Reliance Industries
-    'TCS.NS',      # Tata Consultancy Services
-    'HDFCBANK.NS'  # HDFC Bank
+    'INFY.NS',      # INFY
+    'SBIN.NS'  #SBIN
 ]
 
 # ==============================================================================
