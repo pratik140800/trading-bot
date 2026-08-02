@@ -1,33 +1,207 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
 import os
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+import requests
+from datetime import datetime, timedelta
 
-def send_email_alert(results_df):
-    """Sends an email with the Screener results."""
+# ==============================================================================
+# 0. YOUR WATCHLIST (Yahoo Tickers)
+# ==============================================================================
+WATCHLIST = [
+    '^NSEI',      # NIFTY 50
+    '^NSEBANK',   # BANK NIFTY
+    'RELIANCE.NS', # Reliance Industries
+    'TCS.NS',      # Tata Consultancy Services
+    'HDFCBANK.NS'  # HDFC Bank
+]
+
+# ==============================================================================
+# 1. THE INDICATOR CALCULATION ENGINE (YOUR EXACT FORMULA)
+# ==============================================================================
+def calculate_green_red(df):
+    """Calculates Green and Red lines for a given OHLC DataFrame."""
+    df = df.copy()
     
-    # Convert results to a clean HTML table
-    html_table = results_df.to_html(index=False, border=1, justify='center')
+    # Moving Averages & Bollinger Bands
+    df['SMA20'] = df['Close'].rolling(window=20).mean()
+    df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['EMA40'] = df['Close'].ewm(span=40, adjust=False).mean()
+    df['BB_std'] = df['Close'].rolling(window=20).std()
+    df['BB_upper'] = df['SMA20'] + (df['BB_std'] * 2)
+    df['BB_lower'] = df['SMA20'] - (df['BB_std'] * 2)
+    df = df.dropna()
+
+    # Raw Components
+    df['rel_sma20'] = np.log(df['Close'] / df['SMA20']) * 100
+    df['rel_sma50'] = np.log(df['Close'] / df['SMA50']) * 100
+    df['rel_ema40'] = np.log(df['Close'] / df['EMA40']) * 100
+    df['roc5'] = ((df['Close'] / df['Close'].shift(5)) - 1) * 100
+    df['roc7'] = ((df['Close'] / df['Close'].shift(7)) - 1) * 100
+    df['roc10'] = ((df['Close'] / df['Close'].shift(10)) - 1) * 100
+
+    # Clip ROC to prevent crash distortions
+    clip_limit = 5.0
+    df['roc5'] = df['roc5'].clip(lower=-clip_limit, upper=clip_limit)
+    df['roc7'] = df['roc7'].clip(lower=-clip_limit, upper=clip_limit)
+    df['roc10'] = df['roc10'].clip(lower=-clip_limit, upper=clip_limit)
+
+    df['pct_b'] = (df['Close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'])
+    df['pct_b_centered'] = (df['pct_b'] - 0.5) * 10
+
+    # YOUR CUSTOM FORMULA
+    df['raw1'] = (0.350 * df['rel_sma20']) + (0.150 * df['rel_sma50']) + (0.150 * df['rel_ema40'])
+    df['raw2'] = (0.100 * df['roc5']) + (0.050 * df['roc7']) + (0.100 * df['roc10']) + (0.100 * df['pct_b_centered'])
+    df['raw1_ema3'] = df['raw1'].ewm(span=3, adjust=False).mean()
+    df['raw2_ema6'] = df['raw2'].ewm(span=6, adjust=False).mean()
+    df['raw_green'] = df['raw1_ema3'] + df['raw2_ema6']
+
+    # Dynamic Bias Correction
+    window_size = 20
+    df['rolling_bias'] = df['raw_green'].rolling(window=window_size, min_periods=1).mean()
+    df['Green'] = df['raw_green'] - df['rolling_bias']
     
-    message = Mail(
-        from_email='your_email@gmail.com',  # Must be verified in SendGrid
-        to_emails='your_trading_email@gmail.com',  # Where you want alerts
-        subject=f'🚀 Daily Trading Signals - {datetime.now().strftime("%Y-%m-%d")}',
-        html_content=f"""
-        <h2>Market Signals for Today</h2>
-        <p>Here are the trades to take based on your strategy:</p>
-        {html_table}
-        <br>
-        <p><b>Action Plan:</b><br>
-        - <span style="color:green">BUY 🟢</span>: Enter Long position.<br>
-        - <span style="color:red">SELL 🔴</span>: Enter Short position.<br>
-        - <span style="color:orange">EXIT ⚠️</span>: Close existing position.<br>
-        - <span style="color:gray">HOLD ➖</span>: No action needed.</p>
-        """
-    )
+    # Red Line (Exponential Smoothing)
+    df['Red'] = df['Green'].ewm(alpha=0.2, adjust=False).mean()
+    
+    return df
+
+# ==============================================================================
+# 2. THE TELEGRAM ALERT SYSTEM
+# ==============================================================================
+def send_telegram_alert(results_df):
+    """Sends the screener results to a private Telegram chat."""
+    BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+    CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+    
+    if not BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram credentials missing in environment variables.")
+        return
+
+    # Format the message
+    message = f"📊 *Market Signals - {datetime.now().strftime('%H:%M %d-%m-%Y')}*\n\n"
+    
+    for _, row in results_df.iterrows():
+        # Use emojis for easier reading
+        signal_emoji = {
+            "BUY 🟢": "🟢 BUY",
+            "SELL 🔴": "🔴 SELL",
+            "EXIT LONG ⚠️": "⚠️ EXIT LONG",
+            "EXIT SHORT ⚠️": "⚠️ EXIT SHORT",
+            "HOLD ➖": "➖ HOLD"
+        }.get(row['Signal'], row['Signal'])
+        
+        message += f"*{row['Ticker']}*\n"
+        message += f"Price: {row['Latest Price']}\n"
+        message += f"Trend: {row['Daily Trend']}\n"
+        message += f"Action: {signal_emoji}\n\n"
+
+    # Send to Telegram
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
     
     try:
-        sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
-        response = sg.send(message)
-        print(f"✅ Email sent! Status Code: {response.status_code}")
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print("✅ Telegram alert sent successfully!")
+        else:
+            print(f"❌ Telegram Error: {response.text}")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Failed to send Telegram message: {e}")
+
+# ==============================================================================
+# 3. DATA FETCHER
+# ==============================================================================
+def fetch_live_data(ticker):
+    """Fetches data for today's analysis."""
+    try:
+        # Fetch Daily (latest 60 days)
+        daily = yf.download(ticker, period='2mo', interval='1d', progress=False)
+        if isinstance(daily.columns, pd.MultiIndex):
+            daily.columns = daily.columns.get_level_values(0)
+        daily.index = daily.index.tz_localize(None)
+        
+        # Fetch Hourly (latest 60 days)
+        hourly = yf.download(ticker, period='2mo', interval='1h', progress=False)
+        if isinstance(hourly.columns, pd.MultiIndex):
+            hourly.columns = hourly.columns.get_level_values(0)
+        hourly.index = hourly.index.tz_localize(None)
+        
+        return daily, hourly
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
+
+# ==============================================================================
+# 4. SCAN TICKERS
+# ==============================================================================
+results = []
+
+print("📡 Scanning latest market data...")
+print("-" * 80)
+
+for ticker in WATCHLIST:
+    try:
+        daily_data, hourly_data = fetch_live_data(ticker)
+
+        if daily_data.empty or len(daily_data) < 20:
+            results.append({'Ticker': ticker, 'Signal': 'WAITING FOR DATA'})
+            continue
+
+        # Calculate Daily
+        daily_df = calculate_green_red(daily_data)
+        daily_latest = daily_df.iloc[-1]
+        daily_bullish = daily_latest['Green'] > daily_latest['Red']
+
+        # Defaults
+        signal = "HOLD ➖"
+        latest_price = daily_latest['Close']
+        trend_text = "BULLISH 📈" if daily_bullish else "BEARISH 📉"
+
+        # Calculate Hourly (if available)
+        if not hourly_data.empty and len(hourly_data) > 20:
+            hourly_df = calculate_green_red(hourly_data)
+            hourly_latest = hourly_df.iloc[-1]
+            hourly_prev = hourly_df.iloc[-2]
+
+            hourly_cross_up = (hourly_latest['Green'] > hourly_latest['Red']) and (hourly_prev['Green'] <= hourly_prev['Red'])
+            hourly_cross_down = (hourly_latest['Green'] < hourly_latest['Red']) and (hourly_prev['Green'] >= hourly_prev['Red'])
+
+            # ENTRY / EXIT LOGIC
+            if hourly_cross_up and daily_bullish:
+                signal = "BUY 🟢"
+            elif hourly_cross_down and not daily_bullish:
+                signal = "SELL 🔴"
+            elif hourly_cross_down and daily_bullish:
+                signal = "EXIT LONG ⚠️"
+            elif hourly_cross_up and not daily_bullish:
+                signal = "EXIT SHORT ⚠️"
+            
+            latest_price = hourly_latest['Close']
+        
+        results.append({
+            'Ticker': ticker,
+            'Latest Price': f"{latest_price:.2f}",
+            'Daily Trend': trend_text,
+            'Signal': signal
+        })
+
+    except Exception:
+        results.append({'Ticker': ticker, 'Signal': 'ERROR'})
+
+# ==============================================================================
+# 5. PRINT & SEND RESULTS
+# ==============================================================================
+results_df = pd.DataFrame(results)
+
+print("\n" + "="*80)
+print("📊 DAILY SIGNAL SCREENER RESULTS")
+print("="*80)
+print(results_df.to_string(index=False))
+print("="*80)
+
+# Send the alert to Telegram
+send_telegram_alert(results_df)
