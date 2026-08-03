@@ -6,14 +6,14 @@ import requests
 from datetime import datetime, timedelta
 
 # ==============================================================================
-# 0. YOUR WATCHLIST (Yahoo Tickers)
+# 0. YOUR WATCHLIST (NSE Tickers for nsepy)
 # ==============================================================================
 WATCHLIST = [
     '^NSEI',      # NIFTY 50
     '^NSEBANK',   # BANK NIFTY
     'RELIANCE.NS', # Reliance Industries
-    'INFY.NS',      # INFY
-    'SBIN.NS'  #SBIN
+    'INFY.NS',     # Infosys
+    'SBIN.NS'      # State Bank of India
 ]
 
 # ==============================================================================
