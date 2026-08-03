@@ -1,33 +1,31 @@
-name: Hourly Bot
+name: Hourly bot
 
 on:
-  schedule:
-    # 9:18, 10:18, 11:18, 12:18, 1:18, 2:18, 3:18 PM IST (Mon-Fri)
-    - cron: '48 3 * * 1-5'
-    - cron: '48 4 * * 1-5'
-    - cron: '48 5 * * 1-5'
-    - cron: '48 6 * * 1-5'
-    - cron: '48 7 * * 1-5'
-    - cron: '48 8 * * 1-5'
-    - cron: '48 9 * * 1-5'
   workflow_dispatch:
 
 jobs:
-  bot:
-    runs-on: ubuntu-22.04
+  run-screener:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install libraries
         run: |
-          git clone https://github.com/${{ github.repository }}.git .
-      - name: Setup Python and dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y python3 python3-pip
-          pip3 install yfinance pandas numpy requests nsepy
-      - name: Run Bot
+          pip install yfinance pandas numpy requests
+
+      - name: Run the Bot (Infinite Loop)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          ls -la
-          python3 ultimate_screener
+          while true; do
+            python ultimate_screener.py
+            echo "Waiting 1 hour (3600 seconds) before next run..."
+            sleep 3600
+          done
