@@ -175,7 +175,8 @@ for ticker in WATCHLIST:
 
             # Capture Hourly Stats
             hourly_trend = "BULLISH 📈" if hourly_latest['Green'] > hourly_latest['Red'] else "BEARISH 📉"
-            candle_close_time = hourly_latest.name.strftime('%H:%M')  # Gets the exact time
+           # Add 1 hour to the start time to get the correct close time
+            candle_close_time = (hourly_latest.name + pd.Timedelta(hours=1)).strftime('%H:%M')
 
             # Determine Last Hour Signal
             hourly_cross_up = (hourly_latest['Green'] > hourly_latest['Red']) and (hourly_prev['Green'] <= hourly_prev['Red'])
