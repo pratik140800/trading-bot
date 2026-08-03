@@ -29,5 +29,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           ls -la
-          cd trading-bot
-          python3 ultimate_screener.py
+          python3 ultimate_screener
