@@ -1,33 +1,28 @@
 name: Hourly bot
-
 on:
   schedule:
-    - cron: '50 3 * * 1-5'
-    - cron: '50 4 * * 1-5'
-    - cron: '50 5 * * 1-5'
-    - cron: '50 6 * * 1-5'
-    - cron: '50 7 * * 1-5'
-    - cron: '50 8 * * 1-5'
-    - cron: '50 9 * * 1-5'
-    - cron: '55 13 * * 1-5' 
+    - cron: '50 3 * * 1-5'   # 9:20 AM IST
+    - cron: '50 4 * * 1-5'   # 10:20 AM IST
+    - cron: '50 5 * * 1-5'   # 11:20 AM IST
+    - cron: '50 6 * * 1-5'   # 12:20 PM IST
+    - cron: '50 7 * * 1-5'   # 1:20 PM IST
+    - cron: '50 8 * * 1-5'   # 2:20 PM IST
+    - cron: '50 9 * * 1-5'   # 3:20 PM IST
+    - cron: '0 14 * * 1-5'   # 7:30 PM IST (EOD Update)
   workflow_dispatch:
-
 jobs:
   run-screener:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install libraries
         run: |
           pip install yfinance pandas numpy requests
-
       - name: Run the Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
