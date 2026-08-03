@@ -117,22 +117,28 @@ def send_telegram_alert(results_df):
 # 3. DATA FETCHER
 # ==============================================================================
 def fetch_live_data(ticker):
-    """Fetches data for today's analysis."""
+    """Fetches data using a browser User-Agent to avoid Yahoo blocking."""
     try:
-        # Fetch Daily (latest 60 days)
-        daily = yf.download(ticker, period='2mo', interval='1d', progress=False)
+        # THIS IS THE FIX - We use a real browser User-Agent
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Fetch Daily (latest 60 days) with custom headers
+        daily = yf.download(ticker, period='2mo', interval='1d', progress=False, headers=headers)
         if isinstance(daily.columns, pd.MultiIndex):
             daily.columns = daily.columns.get_level_values(0)
         daily.index = daily.index.tz_localize(None)
         
-        # Fetch Hourly (latest 60 days)
-        hourly = yf.download(ticker, period='2mo', interval='1h', progress=False)
+        # Fetch Hourly (latest 60 days) with custom headers
+        hourly = yf.download(ticker, period='2mo', interval='1h', progress=False, headers=headers)
         if isinstance(hourly.columns, pd.MultiIndex):
             hourly.columns = hourly.columns.get_level_values(0)
         hourly.index = hourly.index.tz_localize(None)
         
         return daily, hourly
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Yahoo block detected for {ticker}. Will retry next hour.")
         return pd.DataFrame(), pd.DataFrame()
 
 # ==============================================================================
