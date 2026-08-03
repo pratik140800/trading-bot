@@ -114,31 +114,43 @@ def send_telegram_alert(results_df):
         print(f"❌ Failed to send Telegram message: {e}")
 
 # ==============================================================================
-# 3. DATA FETCHER
+# 2.5 DATA FETCHER USING NSEPY (Direct NSE connection, no blocks)
 # ==============================================================================
-def fetch_live_data(ticker):
-    """Fetches data using a browser User-Agent to avoid Yahoo blocking."""
+def fetch_nse_data(ticker):
+    """Uses nsepy to fetch data directly from NSE India."""
     try:
-        # THIS IS THE FIX - We use a real browser User-Agent
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        from nsepy import get_history
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=60)
         
-        # Fetch Daily (latest 60 days) with custom headers
-        daily = yf.download(ticker, period='2mo', interval='1d', progress=False, headers=headers)
-        if isinstance(daily.columns, pd.MultiIndex):
-            daily.columns = daily.columns.get_level_values(0)
+        # Map your tickers to NSE symbols
+        nse_map = {
+            '^NSEI': 'NIFTY',
+            '^NSEBANK': 'BANKNIFTY',
+            'RELIANCE.NS': 'RELIANCE',
+            'INFY.NS': 'INFY',
+            'SBIN.NS': 'SBIN'
+        }
+        nse_symbol = nse_map.get(ticker, ticker.replace('.NS', ''))
+        
+        # Fetch Daily
+        daily = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='1d')
+        if nse_symbol in ['NIFTY', 'BANKNIFTY']:
+            daily = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='1d', index=True)
         daily.index = daily.index.tz_localize(None)
         
-        # Fetch Hourly (latest 60 days) with custom headers
-        hourly = yf.download(ticker, period='2mo', interval='1h', progress=False, headers=headers)
-        if isinstance(hourly.columns, pd.MultiIndex):
-            hourly.columns = hourly.columns.get_level_values(0)
+        # Fetch Hourly
+        hourly = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='60m')
+        if nse_symbol in ['NIFTY', 'BANKNIFTY']:
+            hourly = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='60m', index=True)
         hourly.index = hourly.index.tz_localize(None)
         
         return daily, hourly
+    except ImportError:
+        print("⚠️ nsepy not installed. Falling back to dummy data.")
+        return pd.DataFrame(), pd.DataFrame()
     except Exception as e:
-        print(f"⚠️ Yahoo block detected for {ticker}. Will retry next hour.")
+        print(f"⚠️ NSE block for {ticker}. Retrying next hour.")
         return pd.DataFrame(), pd.DataFrame()
 
 # ==============================================================================
