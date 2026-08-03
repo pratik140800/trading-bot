@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y python3 python3-pip
-          pip3 install yfinance pandas numpy requests
+          pip3 install yfinance pandas numpy requests nsepy
       - name: Run Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
