@@ -1,12 +1,11 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ==============================================================================
-# 0. YOUR WATCHLIST (NSE Tickers for nsepy)
+# 0. YOUR WATCHLIST
 # ==============================================================================
 WATCHLIST = [
     '^NSEI',      # NIFTY 50
@@ -17,30 +16,42 @@ WATCHLIST = [
 ]
 
 # ==============================================================================
-# 1. THE INDICATOR CALCULATION ENGINE (YOUR EXACT FORMULA)
+# 1. FORCE FLATTEN FUNCTION
+# ==============================================================================
+def flatten_data(df):
+    if df.empty:
+        return df
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
+
+# ==============================================================================
+# 2. CRASH-PROOF CALCULATION ENGINE
 # ==============================================================================
 def calculate_green_red(df):
-    """Calculates Green and Red lines for a given OHLC DataFrame."""
     df = df.copy()
     
-    # Moving Averages & Bollinger Bands
+    if len(df) < 30:
+        return pd.DataFrame()
+
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['EMA40'] = df['Close'].ewm(span=40, adjust=False).mean()
     df['BB_std'] = df['Close'].rolling(window=20).std()
     df['BB_upper'] = df['SMA20'] + (df['BB_std'] * 2)
     df['BB_lower'] = df['SMA20'] - (df['BB_std'] * 2)
+    
     df = df.dropna()
+    if df.empty:
+        return pd.DataFrame()
 
-    # Raw Components
-    df['rel_sma20'] = np.log(df['Close'] / df['SMA20']) * 100
-    df['rel_sma50'] = np.log(df['Close'] / df['SMA50']) * 100
-    df['rel_ema40'] = np.log(df['Close'] / df['EMA40']) * 100
+    df['rel_sma20'] = (np.log(df['Close'] / df['SMA20']) * 100).astype(float)
+    df['rel_sma50'] = (np.log(df['Close'] / df['SMA50']) * 100).astype(float)
+    df['rel_ema40'] = (np.log(df['Close'] / df['EMA40']) * 100).astype(float)
     df['roc5'] = ((df['Close'] / df['Close'].shift(5)) - 1) * 100
     df['roc7'] = ((df['Close'] / df['Close'].shift(7)) - 1) * 100
     df['roc10'] = ((df['Close'] / df['Close'].shift(10)) - 1) * 100
 
-    # Clip ROC to prevent crash distortions
     clip_limit = 5.0
     df['roc5'] = df['roc5'].clip(lower=-clip_limit, upper=clip_limit)
     df['roc7'] = df['roc7'].clip(lower=-clip_limit, upper=clip_limit)
@@ -49,40 +60,54 @@ def calculate_green_red(df):
     df['pct_b'] = (df['Close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'])
     df['pct_b_centered'] = (df['pct_b'] - 0.5) * 10
 
-    # YOUR CUSTOM FORMULA
     df['raw1'] = (0.350 * df['rel_sma20']) + (0.150 * df['rel_sma50']) + (0.150 * df['rel_ema40'])
     df['raw2'] = (0.100 * df['roc5']) + (0.050 * df['roc7']) + (0.100 * df['roc10']) + (0.100 * df['pct_b_centered'])
     df['raw1_ema3'] = df['raw1'].ewm(span=3, adjust=False).mean()
     df['raw2_ema6'] = df['raw2'].ewm(span=6, adjust=False).mean()
     df['raw_green'] = df['raw1_ema3'] + df['raw2_ema6']
 
-    # Dynamic Bias Correction
     window_size = 20
     df['rolling_bias'] = df['raw_green'].rolling(window=window_size, min_periods=1).mean()
     df['Green'] = df['raw_green'] - df['rolling_bias']
-    
-    # Red Line (Exponential Smoothing)
     df['Red'] = df['Green'].ewm(alpha=0.2, adjust=False).mean()
     
     return df
 
 # ==============================================================================
-# 2. THE TELEGRAM ALERT SYSTEM
+# 3. DATA FETCHER
+# ==============================================================================
+def fetch_data(ticker):
+    try:
+        daily = yf.download(ticker, period='6mo', interval='1d', progress=False)
+        daily = flatten_data(daily)
+        daily.index = daily.index.tz_localize(None)
+        
+        hourly = yf.download(ticker, period='6mo', interval='1h', progress=False)
+        hourly = flatten_data(hourly)
+        hourly.index = hourly.index.tz_localize(None)
+        
+        return daily, hourly
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
+
+# ==============================================================================
+# 4. TELEGRAM ALERT SYSTEM
 # ==============================================================================
 def send_telegram_alert(results_df):
-    """Sends the screener results to a private Telegram chat."""
-    BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-    CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+    # === PASTE YOUR TOKENS HERE ===
+    BOT_TOKEN = "8441018636:AAGPxJ5vp4VHV1RUy7KlVS-EqrLg6A91QIQ"  # Replace this
+    CHAT_ID = "806843206"      # Replace this
     
-    if not BOT_TOKEN or not CHAT_ID:
-        print("⚠️ Telegram credentials missing in environment variables.")
+    if results_df.empty:
+        print("⚠️ No data to send to Telegram.")
         return
-
-    # Format the message
+    
     message = f"📊 *Market Signals - {datetime.now().strftime('%H:%M %d-%m-%Y')}*\n\n"
     
     for _, row in results_df.iterrows():
-        # Use emojis for easier reading
+        if row['Signal'] == 'NO DATA':
+            continue
+            
         signal_emoji = {
             "BUY 🟢": "🟢 BUY",
             "SELL 🔴": "🔴 SELL",
@@ -93,16 +118,14 @@ def send_telegram_alert(results_df):
         
         message += f"*{row['Ticker']}*\n"
         message += f"Price: {row['Latest Price']}\n"
-        message += f"Trend: {row['Daily Trend']}\n"
+        message += f"Daily Trend: {row['Daily Trend']}\n"
+        message += f"Hourly Trend: {row['Hourly Trend']}\n"
+        message += f"Last Hour Signal: {row['Last Hour Signal']}\n"
+        message += f"Signal Close Time: {row['Candle Close Time']}\n"
         message += f"Action: {signal_emoji}\n\n"
 
-    # Send to Telegram
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': CHAT_ID,
-        'text': message,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
     
     try:
         response = requests.post(url, json=payload)
@@ -114,81 +137,62 @@ def send_telegram_alert(results_df):
         print(f"❌ Failed to send Telegram message: {e}")
 
 # ==============================================================================
-# 2.5 DATA FETCHER USING NSEPY (Direct NSE connection, no blocks)
-# ==============================================================================
-def fetch_nse_data(ticker):
-    """Uses nsepy to fetch data directly from NSE India."""
-    try:
-        from nsepy import get_history
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=60)
-        
-        # Map your tickers to NSE symbols
-        nse_map = {
-            '^NSEI': 'NIFTY',
-            '^NSEBANK': 'BANKNIFTY',
-            'RELIANCE.NS': 'RELIANCE',
-            'INFY.NS': 'INFY',
-            'SBIN.NS': 'SBIN'
-        }
-        nse_symbol = nse_map.get(ticker, ticker.replace('.NS', ''))
-        
-        # Fetch Daily
-        daily = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='1d')
-        if nse_symbol in ['NIFTY', 'BANKNIFTY']:
-            daily = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='1d', index=True)
-        daily.index = daily.index.tz_localize(None)
-        
-        # Fetch Hourly
-        hourly = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='60m')
-        if nse_symbol in ['NIFTY', 'BANKNIFTY']:
-            hourly = get_history(symbol=nse_symbol, start=start_date, end=end_date, interval='60m', index=True)
-        hourly.index = hourly.index.tz_localize(None)
-        
-        return daily, hourly
-    except ImportError:
-        print("⚠️ nsepy not installed. Falling back to dummy data.")
-        return pd.DataFrame(), pd.DataFrame()
-    except Exception as e:
-        print(f"⚠️ NSE block for {ticker}. Retrying next hour.")
-        return pd.DataFrame(), pd.DataFrame()
-
-# ==============================================================================
-# 4. SCAN TICKERS
+# 5. MAIN SCANNER
 # ==============================================================================
 results = []
-
 print("📡 Scanning latest market data...")
 print("-" * 80)
 
 for ticker in WATCHLIST:
-    try:
-        daily_data, hourly_data = fetch_nse_data(ticker)
+    daily, hourly = fetch_data(ticker)
+    
+    if daily.empty:
+        results.append({'Ticker': ticker, 'Signal': 'NO DATA', 'Latest Price': 'N/A', 'Daily Trend': 'N/A'})
+        continue
 
-        if daily_data.empty or len(daily_data) < 20:
-            results.append({'Ticker': ticker, 'Signal': 'WAITING FOR DATA'})
-            continue
+    daily_df = calculate_green_red(daily)
+    if daily_df.empty:
+        results.append({'Ticker': ticker, 'Signal': 'NO DATA', 'Latest Price': 'N/A', 'Daily Trend': 'N/A'})
+        continue
 
-        # Calculate Daily
-        daily_df = calculate_green_red(daily_data)
-        daily_latest = daily_df.iloc[-1]
-        daily_bullish = daily_latest['Green'] > daily_latest['Red']
+    daily_latest = daily_df.tail(1).iloc[0]
+    daily_bullish = daily_latest['Green'] > daily_latest['Red']
 
-        # Defaults
-        signal = "HOLD ➖"
-        latest_price = daily_latest['Close']
-        trend_text = "BULLISH 📈" if daily_bullish else "BEARISH 📉"
+    signal = "HOLD ➖"
+    latest_price = f"{daily_latest['Close']:.2f}"
+    trend_text = "BULLISH 📈" if daily_bullish else "BEARISH 📉"
+    
+    # Default Hourly Values
+    hourly_trend = "N/A"
+    last_hour_signal = "N/A"
+    candle_close_time = "N/A"
 
-        # Calculate Hourly (if available)
-        if not hourly_data.empty and len(hourly_data) > 20:
-            hourly_df = calculate_green_red(hourly_data)
-            hourly_latest = hourly_df.iloc[-1]
-            hourly_prev = hourly_df.iloc[-2]
+    if not hourly.empty and len(hourly) > 30:
+        hourly_df = calculate_green_red(hourly)
+        if not hourly_df.empty:
+            hourly_latest = hourly_df.tail(1).iloc[0]
+            hourly_prev = hourly_df.tail(2).iloc[0]
 
+            # Capture Hourly Stats
+            hourly_trend = "BULLISH 📈" if hourly_latest['Green'] > hourly_latest['Red'] else "BEARISH 📉"
+            candle_close_time = hourly_latest.name.strftime('%H:%M')  # Gets the exact time
+
+            # Determine Last Hour Signal
             hourly_cross_up = (hourly_latest['Green'] > hourly_latest['Red']) and (hourly_prev['Green'] <= hourly_prev['Red'])
             hourly_cross_down = (hourly_latest['Green'] < hourly_latest['Red']) and (hourly_prev['Green'] >= hourly_prev['Red'])
+            
+            if hourly_cross_up and daily_bullish:
+                last_hour_signal = "BUY 🟢"
+            elif hourly_cross_down and not daily_bullish:
+                last_hour_signal = "SELL 🔴"
+            elif hourly_cross_down and daily_bullish:
+                last_hour_signal = "EXIT LONG ⚠️"
+            elif hourly_cross_up and not daily_bullish:
+                last_hour_signal = "EXIT SHORT ⚠️"
+            else:
+                last_hour_signal = "HOLD ➖"
 
-            # ENTRY / EXIT LOGIC
+            # Current Action (based on last hour)
             if hourly_cross_up and daily_bullish:
                 signal = "BUY 🟢"
             elif hourly_cross_down and not daily_bullish:
@@ -198,28 +202,27 @@ for ticker in WATCHLIST:
             elif hourly_cross_up and not daily_bullish:
                 signal = "EXIT SHORT ⚠️"
             
-            latest_price = hourly_latest['Close']
-        
-        results.append({
-            'Ticker': ticker,
-            'Latest Price': f"{latest_price:.2f}",
-            'Daily Trend': trend_text,
-            'Signal': signal
-        })
+            latest_price = f"{hourly_latest['Close']:.2f}"
 
-    except Exception:
-        results.append({'Ticker': ticker, 'Signal': 'ERROR'})
+    results.append({
+        'Ticker': ticker,
+        'Latest Price': latest_price,
+        'Daily Trend': trend_text,
+        'Hourly Trend': hourly_trend,
+        'Last Hour Signal': last_hour_signal,
+        'Candle Close Time': candle_close_time,
+        'Signal': signal
+    })
 
 # ==============================================================================
-# 5. PRINT & SEND RESULTS
+# 6. PRINT RESULTS
 # ==============================================================================
 results_df = pd.DataFrame(results)
 
-print("\n" + "="*80)
-print("📊 DAILY SIGNAL SCREENER RESULTS")
-print("="*80)
+print("\n" + "="*100)
+print("📊 DAILY SIGNAL SCREENER RESULTS (WITH HOURLY DETAILS)")
+print("="*100)
 print(results_df.to_string(index=False))
-print("="*80)
+print("="*100)
 
-# Send the alert to Telegram
 send_telegram_alert(results_df)
