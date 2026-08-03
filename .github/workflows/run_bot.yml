@@ -16,20 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Libraries
         run: |
-          pip install --upgrade pip
-          pip install yfinance pandas numpy requests
-
-      - name: Run the Bot
+          git clone https://github.com/${{ github.repository }}.git .
+          
+      - name: Install Python and Libraries
+        run: |
+          sudo apt update
+          sudo apt install -y python3 python3-pip
+          pip3 install yfinance pandas numpy requests
+          
+      - name: Run the Trading Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python ultimate_screener.py
+        run: python3 ultimate_screener.py
