@@ -163,7 +163,7 @@ print("-" * 80)
 
 for ticker in WATCHLIST:
     try:
-        daily_data, hourly_data = fetch_live_data(ticker)
+        daily_data, hourly_data = fetch_nse_data(ticker)
 
         if daily_data.empty or len(daily_data) < 20:
             results.append({'Ticker': ticker, 'Signal': 'WAITING FOR DATA'})
